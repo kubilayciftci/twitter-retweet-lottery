@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"io"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -49,20 +49,37 @@ func main() {
 		panic(err)
 	}
 
-	ctx := context.Background()
-	conf := &oauth2.Config{
-		ClientID:     keys.Key,
-		ClientSecret: keys.Secret,
-		Endpoint: oauth2.Endpoint{
-			TokenURL: "",
-			AuthURL:  "",
-		},
-	}
-	tclient := conf.Client(ctx, &token)
-	rt, err := tclient.Get("https://api.twitter.com/1.1/statuses/retweets/1348367126151778307.json")
+	var conf oauth2.Config
+	tclient := conf.Client(context.Background(), &token)
+	usernames, err := retweeters(tclient, "1348388323572801537")
 	if err != nil {
 		panic(err)
 	}
+	fmt.Println(usernames)
+}
+
+func retweeters(client *http.Client, tweetID string) ([]string, error) {
+	url := fmt.Sprintf("https://api.twitter.com/1.1/statuses/retweets/%s.json", tweetID)
+	rt, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
 	defer rt.Body.Close()
-	io.Copy(os.Stdout, rt.Body)
+
+	var retweets []struct {
+		User struct {
+			ScreenName string `json:"screen_name"`
+		} `json:"user"`
+	}
+	dec := json.NewDecoder(rt.Body)
+	err = dec.Decode(&retweets)
+	if err != nil {
+		return nil, err
+	}
+
+	usernames := make([]string, 0, len(retweets))
+	for _, retweet := range retweets {
+		usernames = append(usernames, retweet.User.ScreenName)
+	}
+	return usernames, nil
 }

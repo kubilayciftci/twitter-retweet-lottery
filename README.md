@@ -1,1 +1,1 @@
-# Twitter Lottery App with Go with CLI
+# Twitter Lottery App with Go

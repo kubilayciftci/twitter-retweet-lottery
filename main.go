@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -13,49 +15,81 @@ import (
 
 func main() {
 
-	var keys struct {
-		Key    string `json:"consumer_key"`
-		Secret string `json:"consumer_secret"`
-	}
+	var (
+		keyFile   string
+		usersFile string
+		tweetID   string
+	)
+	flag.StringVar(&keyFile, "key", ".keys.json", "The file where you store consumer key and secret for the Twitter API.")
+	flag.StringVar(&usersFile, "users", "users.csv", "The file where users who have rtweeted the tweet are stored. This will be created if it does not exist.")
+	flag.StringVar(&tweetID, "tweet", "1348388323572801537", "The ID of the Tweet you wish to find retweeters of.")
 
-	f, err := os.Open(".keys.json")
+	flag.Parse()
+
+	key, secret, err := keys(keyFile)
+
+	client, err := twitterClient(key, secret)
 	if err != nil {
 		panic(err)
 	}
-	defer f.Close()
 
-	dec := json.NewDecoder(f)
-	dec.Decode(&keys)
+	newUsernames, err := retweeters(client, tweetID)
+	if err != nil {
+		panic(err)
+	}
+	existUsernames := existing(usersFile)
 
+	allUsernames := merge(newUsernames, existUsernames)
+
+	err = writeUsers(usersFile, allUsernames)
+	if err != nil {
+		panic(err)
+	}
+
+}
+
+func twitterClient(key, secret string) (*http.Client, error) {
 	req, err := http.NewRequest("POST", "https://api.twitter.com/oauth2/token", strings.NewReader("grant_type=client_credentials"))
 	if err != nil {
 		panic(err)
 	}
 
-	req.SetBasicAuth(keys.Key, keys.Secret)
+	req.SetBasicAuth(key, secret)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
 	var client http.Client
 	res, err := client.Do(req)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	defer res.Body.Close()
 
 	var token oauth2.Token
 
-	dec = json.NewDecoder(res.Body)
+	dec := json.NewDecoder(res.Body)
 	err = dec.Decode(&token)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	var conf oauth2.Config
-	tclient := conf.Client(context.Background(), &token)
-	usernames, err := retweeters(tclient, "1348388323572801537")
-	if err != nil {
-		panic(err)
+	return conf.Client(context.Background(), &token), nil
+}
+
+func keys(keyFile string) (key, secret string, err error) {
+	var keys struct {
+		Key    string `json:"consumer_key"`
+		Secret string `json:"consumer_secret"`
 	}
-	fmt.Println(usernames)
+
+	f, err := os.Open(keyFile)
+	if err != nil {
+		return "", "", err
+	}
+	defer f.Close()
+
+	dec := json.NewDecoder(f)
+	dec.Decode(&keys)
+	return keys.Key, keys.Secret, nil
 }
 
 func retweeters(client *http.Client, tweetID string) ([]string, error) {
@@ -82,4 +116,54 @@ func retweeters(client *http.Client, tweetID string) ([]string, error) {
 		usernames = append(usernames, retweet.User.ScreenName)
 	}
 	return usernames, nil
+}
+
+func existing(usersFile string) []string {
+	f, err := os.Open(usersFile)
+	if err != nil {
+		return []string{}
+	}
+	defer f.Close()
+	r := csv.NewReader(f)
+	lines, err := r.ReadAll()
+	users := make([]string, 0, len(lines))
+	for _, line := range lines {
+		users = append(users, line[0])
+	}
+	return users
+}
+
+func merge(a, b []string) []string {
+	uniq := make(map[string]struct{}, 0)
+	for _, user := range a {
+		uniq[user] = struct{}{}
+	}
+	for _, user := range b {
+		uniq[user] = struct{}{}
+	}
+
+	ret := make([]string, 0, len(uniq))
+	for user := range uniq {
+		ret = append(ret, user)
+	}
+	return ret
+}
+
+func writeUsers(usersFile string, users []string) error {
+	f, err := os.OpenFile(usersFile, os.O_RDWR|os.O_CREATE, 0755)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	w := csv.NewWriter(f)
+	for _, user := range users {
+		if err := w.Write([]string{user}); err != nil {
+			return err
+		}
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		return err
+	}
+	return nil
 }

@@ -10,3 +10,4 @@
 .glide/
 tmp/*
 .keys.json
+.idea
